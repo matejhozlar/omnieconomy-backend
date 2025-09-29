@@ -1,6 +1,6 @@
-import dotenv from "dotenv";
 import logger from "../../logger";
 import { REQUIRED_VARS, type RequiredEnvVar } from "./vars/requiredVars";
+import dotenv from "dotenv";
 
 dotenv.config({ quiet: true });
 
