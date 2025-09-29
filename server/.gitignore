@@ -1,0 +1,4 @@
+# packages & tools
+node_modules
+dist
+.env
