@@ -13,10 +13,11 @@ export default function registerDaily(router: Router, { db }: Deps) {
   router.post(
     "/currency/daily",
     async (req: Request, res: Response<DailyResponse>) => {
-      const uuid = req.user?.uuid;
+      const uuid = req.user?.uuid as string | undefined;
+      const serverId = req.user?.serverId as number | undefined;
 
-      if (!uuid) {
-        return res.status(400).json({ error: "Missing uuid" });
+      if (!uuid || !serverId) {
+        return res.status(400).json({ error: "Missing uuid or serverId" });
       }
 
       const DAILY_REWARD_AMOUNT = 50;
@@ -30,45 +31,56 @@ export default function registerDaily(router: Router, { db }: Deps) {
           second: 0,
           millisecond: 0,
         });
-        if (ts < resetTime) {
-          resetTime = resetTime.minus({ days: 1 });
-        }
+        if (ts < resetTime) resetTime = ts.minus({ days: 1 });
         return resetTime;
       };
-
       const lastReset = getLastReset(now);
 
       const client = await db.connect();
       try {
         await client.query("BEGIN");
 
-        const linkRes = await client.query<{ discord_id: string }>(
-          `SELECT discord_id FROM users WHERE uuid = $1 LIMIT 1`,
-          [uuid]
+        const linkRes = await client.query<{ discord_id: string | null }>(
+          `SELECT discord_id
+             FROM players
+            WHERE server_id = $1 AND minecraft_uuid = $2
+            LIMIT 1`,
+          [serverId, uuid]
         );
-        if (linkRes.rowCount === 0) {
+        if (linkRes.rowCount === 0 || !linkRes.rows[0].discord_id) {
           await client.query("ROLLBACK");
           return res.status(404).json({
             error: "Your Minecraft account is not linked to Discord.",
           });
         }
-        const discordId = linkRes.rows[0].discord_id;
 
-        const userRes = await client.query<{ balance: string }>(
-          `SELECT balance FROM user_funds WHERE uuid = $1 FOR UPDATE`,
-          [uuid]
+        const accRes = await client.query<{
+          account_id: number;
+          balance: string;
+        }>(
+          `
+          SELECT a.id AS account_id, a.balance
+            FROM servers s
+            JOIN accounts a ON a.group_id = s.group_id AND a.holder_uuid = $2
+           WHERE s.id = $1
+           FOR UPDATE
+          `,
+          [serverId, uuid]
         );
-        if (userRes.rowCount === 0) {
+        if (accRes.rowCount === 0) {
           await client.query("ROLLBACK");
-          return res.status(404).json({ error: "User not found." });
+          return res.status(404).json({ error: "Account not found." });
         }
-        const currentBal = Math.floor(parseFloat(userRes.rows[0].balance));
+        const accountId = accRes.rows[0].account_id;
+        const currentBal = Math.floor(parseFloat(accRes.rows[0].balance));
 
         const rewardRes = await client.query<{ last_claim_at: Date }>(
-          `SELECT last_claim_at FROM daily_rewards WHERE discord_id = $1 FOR UPDATE`,
-          [discordId]
+          `SELECT last_claim_at
+             FROM daily_rewards
+            WHERE account_id = $1
+            FOR UPDATE`,
+          [accountId]
         );
-
         if (
           (rewardRes.rowCount ?? 0) > 0 &&
           DateTime.fromJSDate(rewardRes.rows[0].last_claim_at).setZone(
@@ -76,34 +88,36 @@ export default function registerDaily(router: Router, { db }: Deps) {
           ) >= lastReset
         ) {
           await client.query("ROLLBACK");
-
           const nextReset = lastReset.plus({ days: 1 });
           const diff = nextReset.diff(now, ["hours", "minutes"]).toObject();
           const hours = Math.floor(diff.hours ?? 0);
           const minutes = Math.floor(diff.minutes ?? 0);
-
           return res.status(429).json({
             error: `⏳ You already claimed your daily reward. Next reset in ${hours}h ${minutes}m.`,
           });
         }
 
-        await client.query(
-          `UPDATE user_funds SET balance = balance + $1 WHERE uuid = $2`,
-          [DAILY_REWARD_AMOUNT, uuid]
+        const updAcc = await client.query<{ balance: string }>(
+          `UPDATE accounts
+              SET balance = balance + $1,
+                  updated_at = NOW()
+            WHERE id = $2
+        RETURNING balance`,
+          [DAILY_REWARD_AMOUNT, accountId]
         );
+
         await client.query(
-          `INSERT INTO daily_rewards (discord_id, last_claim_at)
+          `INSERT INTO daily_rewards (account_id, last_claim_at)
            VALUES ($1, $2)
-           ON CONFLICT (discord_id)
+           ON CONFLICT (account_id)
            DO UPDATE SET last_claim_at = EXCLUDED.last_claim_at`,
-          [discordId, now.toJSDate()]
+          [accountId, now.toJSDate()]
         );
 
         await client.query("COMMIT");
 
-        const newBalance = currentBal + DAILY_REWARD_AMOUNT;
+        const newBalance = Math.floor(parseFloat(updAcc.rows[0].balance));
         const formatted = newBalance.toLocaleString("en-US");
-
         return res.json({
           message: `You claimed your daily reward of $${DAILY_REWARD_AMOUNT}!\n💰 New Balance: $${formatted}`,
           new_balance: newBalance,

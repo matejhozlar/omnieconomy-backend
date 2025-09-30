@@ -9,6 +9,7 @@ import registerDeposit from "./deposit.post";
 import registerWithdraw from "./withdraw.post";
 import registerTop from "./top.get";
 import registerDaily from "./daily.post";
+import registerServerRegister from "./server-register.post";
 
 export interface Deps {
   db: Pool;
@@ -17,6 +18,7 @@ export interface Deps {
 export default function modRouter(deps: Deps) {
   const router = Router();
 
+  registerServerRegister(router, deps);
   registerLogin(router, deps);
 
   const protectedRouter = Router();
