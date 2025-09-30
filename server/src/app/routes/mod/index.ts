@@ -3,8 +3,12 @@ import type { Pool } from "pg";
 import verifyIP from "../../middleware/verifyIP";
 import verifyJWT from "../../middleware/verifyJWT";
 
-import loginRouter from "./login.post";
-import balanceRouter from "./balance.get";
+import registerLogin from "./login.post";
+import registerBalance from "./balance.get";
+import registerDeposit from "./deposit.post";
+import registerWithdraw from "./withdraw.post";
+import registerTop from "./top.get";
+import registerDaily from "./daily.post";
 
 export interface Deps {
   db: Pool;
@@ -13,12 +17,16 @@ export interface Deps {
 export default function modRouter(deps: Deps) {
   const router = Router();
 
-  loginRouter(router, deps);
+  registerLogin(router, deps);
 
   const protectedRouter = Router();
   protectedRouter.use(verifyIP, verifyJWT);
 
-  balanceRouter(protectedRouter, deps);
+  registerBalance(protectedRouter, deps);
+  registerDeposit(protectedRouter, deps);
+  registerWithdraw(protectedRouter, deps);
+  registerTop(protectedRouter, deps);
+  registerDaily(protectedRouter, deps);
 
   router.use(protectedRouter);
 
